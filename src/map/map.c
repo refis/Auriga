@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (C) 2002-2007  Auriga
  *
  * This file is part of Auriga.
@@ -72,6 +72,7 @@
 #include "elem.h"
 #include "memorial.h"
 #include "extra.h"
+#include "luascript.h"
 
 // 極力 staticでローカルに収める
 static struct dbt *id_db        = NULL;
@@ -2991,6 +2992,7 @@ void do_final(void)
 	do_final_friend();
 	do_final_unit();
 	do_final_mob();
+	do_final_luascript();
 	do_final_atcommand();
 
 	for(i = 0; i < MAX_FLOORITEM; i++) {
@@ -3125,6 +3127,7 @@ int do_init(int argc,char *argv[])
 	do_init_battle();
 	do_init_chrif();
 	do_init_clif();
+	do_init_luascript();
 	do_init_script();	// parse_script を呼び出す前にこれを呼ぶ
 	do_init_skill();	// skill_dbを参照するのでpc,homun,merc,guild,npcより先
 	do_init_itemdb();

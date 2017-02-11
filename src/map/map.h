@@ -26,6 +26,7 @@
 
 #include "mmo.h"
 #include "script.h"
+#include "lua.h"
 
 #define MAX_NPC_PER_MAP 512
 #define BLOCK_SIZE 8
@@ -455,6 +456,9 @@ struct map_session_data {
 
 	char wis_refusal[MAX_WIS_REFUSAL][24];	// Wis拒否リスト
 
+	int lua_script_state;
+	lua_State *NL;
+
 	struct {
 		short attackrange;
 		short attackrange_;
@@ -516,7 +520,7 @@ struct map_session_data {
 	short view_class;
 	struct pc_base_job s_class;
 
-	short weapontype1,weapontype2;	// 〜WT_MAX
+	short weapontype1,weapontype2;	// ～WT_MAX
 	int paramb[6],paramc[6],parame[6],paramcard[6];
 	int hit,flee,flee2,aspd,amotion,dmotion;
 	int watk,watk2,atkmods[MAX_SIZE_FIX];
