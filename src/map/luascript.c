@@ -28,15 +28,9 @@
 #include "utils.h"
 
 #include "map.h"
-#include "path.h"
-#include "clif.h"
-#include "intif.h"
 #include "npc.h"
 #include "mob.h"
-#include "battle.h"
-#include "skill.h"
-#include "status.h"
-#include "unit.h"
+#include "itemdb.h"
 #include "luascript.h"
 
 #include "lua.h"
@@ -55,6 +49,86 @@ extern const struct Lua_function {
 	const char *name;
 	lua_CFunction f;
 } luafunc[];
+
+/*==========================================
+ * Stackのdump
+ *------------------------------------------
+ */
+static void stackDump(lua_State *L)
+{
+	int i;
+	int top = lua_gettop(L);
+	printf("Stack dump...\n");  /* end the listing */
+	for (i = 1; i <= top; i++) {  /* repeat for each level */
+		int t = lua_type(L, i);
+		switch (t) {
+		
+		case LUA_TSTRING:  /* strings */
+			printf("`%s'", lua_tostring(L, i));
+			break;
+			
+		case LUA_TBOOLEAN:  /* booleans */
+			printf(lua_toboolean(L, i) ? "true" : "false");
+            break;
+    
+		case LUA_TNUMBER:  /* numbers */
+			printf("%g", lua_tonumber(L, i));
+			break;
+    
+		default:  /* other values */
+			printf("%s", lua_typename(L, t));
+			break;
+    
+		}
+		printf("  ");  /* put a separator */
+	}
+		printf("\n");  /* end the listing */
+}
+
+/*==========================================
+ * Stackのtable閲覧
+ *------------------------------------------
+ */
+void show_table(lua_State *L, int index)
+{
+	lua_pushnil(L);
+	while(lua_next(L, index)) {
+		switch (lua_type(L, -2)) {  // key を表示
+		case LUA_TNUMBER:
+			printf("key=%td, ", lua_tointeger(L, -2));
+			break;
+		case LUA_TSTRING:
+			printf("key=%s, ", lua_tostring(L, -2));
+			break;
+		}
+		switch(lua_type(L, -1)) {  // value を表示
+		case LUA_TNUMBER:
+			printf("value=%td\n", lua_tointeger(L, -1));
+			break;
+		case LUA_TSTRING:
+			printf("value=%s\n", lua_tostring(L, -1));
+			break;
+		case LUA_TBOOLEAN:
+			printf("value=%d\n", lua_toboolean(L, -1));
+			break;
+		default:
+			printf("value=%s\n", lua_typename(L, lua_type(L, -1)));
+			break;
+		}
+		lua_pop(L, 1);      // 値を取り除く
+	}
+}
+
+// 特定 key へのアクセス
+void show_table_item(lua_State *L, const char *key, int index)
+{
+	lua_pushstring(L, key);
+	lua_rawget(L, index);
+	if(lua_isstring(L, -1)) {
+		const char* val = lua_tostring(L, -1);
+		printf("key=%s, value=%s\n", key, val);
+	}
+}
 
 /*==========================================
  * functionの実行
@@ -109,9 +183,9 @@ int lua_run_function(const char *name,int char_id,const char *format,...)
 		return 0;
 	}
 
-	if(sd && sd->lua_script_state==L_NRUN) { // If the script has finished (not waiting answer from client)
-	    sd->NL=NULL; // Close the player's personal thread
-		sd->npc_id=0; // Set the player's current NPC to 'none'
+	if(sd && sd->lua_script_state==L_NRUN) {
+	    sd->NL=NULL;
+		sd->npc_id=0;
 	}
 
 	return 0;
@@ -125,11 +199,16 @@ static void lua_addscript(const char *chunk)
 {
 	lua_State *NL;
 
-	NL = L;
+	NL = lua_newthread(L);
 
 	luaL_loadfile(NL,chunk);
-	if(lua_pcall(NL,0,0,0) != 0) {
+	if(lua_pcall(NL,0,2,0) != 0) {
 		printf("Cannot run chunk %s : %s\n",chunk,lua_tostring(NL,-1));
+		return;
+	}
+	lua_getglobal(NL,"main");		// functionをスタックに積む
+	if(lua_pcall(NL,0,2,0) != 0 && lua_tostring(NL,-1) != NULL) {
+		printf("lua_run_function: can't run function %s : %s\n",chunk,lua_tostring(NL,-1));
 		return;
 	}
 
@@ -283,8 +362,8 @@ void lua_reload(void)
 	L = lua_open();
 	luaL_openlibs(L);
 
-	lua_config_read(lua_conf_filename);
 	lua_register_function();
+	lua_config_read(lua_conf_filename);
 
 	// ロック解除
 	lua_lock_script = 0;
@@ -300,8 +379,8 @@ int do_init_luascript(void)
 	L = lua_open();
 	luaL_openlibs(L);
 
-	lua_config_read(lua_conf_filename);
 	lua_register_function();
+	lua_config_read(lua_conf_filename);
 
 	if(garbage_collect_interval > 0) {
 		add_timer_func_list(lua_garbagecollect);
@@ -329,28 +408,77 @@ int do_final_luascript(void)
 //
 
 /*==========================================
- * NPC出現
+ * item_randopt_db.lua
  *------------------------------------------
  */
-static int luafunc_addnpc(lua_State *NL)
+static int luafunc_addrandopt(lua_State *NL)
 {
-	int x, y, dir = 0, class_ = 0;
-	char name[512],map[16];
+	int nameid, mob_id, val;
+	int i=0;
+	struct randopt_item_data ro;
 
-	sprintf(map, "%s", luaL_checkstring(NL,1));
-	x=luaL_checkint(NL,2);
-	y=luaL_checkint(NL,3);
-	dir=luaL_checkint(NL,4);
-	sprintf(name, "%s", luaL_checkstring(NL,5));
-	class_=luaL_checkint(NL,6);
+	memset(&ro, 0, sizeof(ro));
 
-//	npc_parse_luanpc(map,x,y,dir,name,class_);
+	nameid=luaL_checkint(NL,1);
+	if(!itemdb_exists(nameid))
+		return 0;
+	ro.nameid = nameid;
+
+	mob_id=luaL_checkint(NL,2);
+	if(mob_id >= 0 && !mobdb_checkid(mob_id))
+		return 0;
+	ro.mobid = mob_id;
+
+	lua_pushnil(NL);
+	while(lua_next(NL, 3)) {
+		if(lua_istable(NL,-1)) {
+			lua_pushnil(NL);
+			while(lua_next(NL, -2)) {
+				switch(luaL_checkint(NL,-2)) {  // key を表示
+				case 1:
+					val = luaL_checkint(NL,-1) - 1;
+					if(val < 0 || val >= 5)
+						val = 0;
+					ro.opt[i].slot = val;
+					break;
+				case 2:
+					ro.opt[i].optid = luaL_checkint(NL,-1);
+					break;
+				case 3:
+					if(lua_istable(NL,-1)) {
+						lua_rawgeti(NL,-1,1);
+						ro.opt[i].optval_min = luaL_checkint(NL,-1);
+						lua_pop(NL, 1);      // 値を取り除く
+						lua_rawgeti(NL,-1,2);
+						ro.opt[i].optval_max = luaL_checkint(NL,-1);
+						lua_pop(NL, 1);      // 値を取り除く
+					}
+					else {
+						val = luaL_checkint(NL,-1);
+						ro.opt[i].optval_min = val;
+						ro.opt[i].optval_max = val;
+					}
+					break;
+				case 4:
+					ro.opt[i].rate = luaL_checkint(NL,-1);
+					break;
+				}
+				lua_pop(NL, 1);      // 値を取り除く
+			}
+			lua_pop(NL, 1);      // 値を取り除く
+			if(++i >= MAX_RANDOPT_TABLE)
+				break;
+		}
+	}
+	lua_pop(NL, 3);      // 値を取り除く
+
+	itemdb_insert_randoptdb(ro);
 
 	return 0;
 }
 
 
 const struct Lua_function luafunc[] = {
-	{"addnpc",luafunc_addnpc},
+	{"addrandopt",luafunc_addrandopt},
 	{NULL,NULL}
 };

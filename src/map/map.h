@@ -1185,6 +1185,7 @@ struct delay_item_drop {
 	short m,x,y;
 	int nameid,amount;
 	int first_id,second_id,third_id;
+	int randopt;
 };
 
 struct delay_item_drop2 {

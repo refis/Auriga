@@ -27,7 +27,14 @@
 lua_State *L;
 
 extern int lua_respawn_id;
-extern enum { L_NRUN,L_CLOSE,L_NEXT,L_INPUT,L_MENU, L_END };
+enum {
+	L_NRUN  = 0,
+	L_CLOSE,
+	L_NEXT,
+	L_INPUT,
+	L_MENU,
+	L_END
+};
 
 int lua_run_function(const char *name,int char_id,const char *format,...);
 

@@ -3127,7 +3127,6 @@ int do_init(int argc,char *argv[])
 	do_init_battle();
 	do_init_chrif();
 	do_init_clif();
-	do_init_luascript();
 	do_init_script();	// parse_script を呼び出す前にこれを呼ぶ
 	do_init_skill();	// skill_dbを参照するのでpc,homun,merc,guild,npcより先
 	do_init_itemdb();
@@ -3136,6 +3135,7 @@ int do_init(int argc,char *argv[])
 	do_init_npc();
 	do_init_memorial();
 	do_init_pc();
+	do_init_luascript();
 	do_init_bonus();
 	do_init_party();
 	do_init_booking();
