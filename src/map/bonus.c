@@ -2193,44 +2193,50 @@ int bonus_randopt(struct map_session_data *sd,int id,int val)
 		break;
 	case 168:
 		{
+			int i, j;
 			int skill[5] = {28,70,231,2043,2051};
-			// update
-			for(i=0; i<sd->skill_healup.count; i++)
-			{
-				if(sd->skill_healup.id[i] == type2)
+			for(j=0; j<5; j++) {
+				// update
+				for(i=0; i<sd->skill_healup.count; i++)
 				{
-					sd->skill_healup.rate[i] += val;
-					return 0;
+					if(sd->skill_healup.id[i] == skill[j])
+					{
+						sd->skill_healup.rate[i] += val;
+						return 0;
+					}
 				}
+				// full
+				if(sd->skill_healup.count == MAX_SKILL_HEAL_UP)
+					break;
+				// add
+				sd->skill_healup.id[sd->skill_healup.count] = skill[5];
+				sd->skill_healup.rate[sd->skill_healup.count] = val;
+				sd->skill_healup.count++;
 			}
-			// full
-			if(sd->skill_healup.count == MAX_SKILL_HEAL_UP)
-				break;
-			// add
-			sd->skill_healup.id[sd->skill_healup.count] = type2;
-			sd->skill_healup.rate[sd->skill_healup.count] = val;
-			sd->skill_healup.count++;
 		}
 		break;
 	case 169:
 		{
+			int i, j;
 			int skill[4] = {28,70,231,2051};
-			// update
-			for(i=0; i<sd->skill_subhealup.count; i++)
-			{
-				if(sd->skill_subhealup.id[i] == type2)
+			for(j=0; j<4; j++) {
+				// update
+				for(i=0; i<sd->skill_subhealup.count; i++)
 				{
-					sd->skill_subhealup.rate[i] += val;
-					return 0;
+					if(sd->skill_subhealup.id[i] == skill[j])
+					{
+						sd->skill_subhealup.rate[i] += val;
+						return 0;
+					}
 				}
+				// full
+				if(sd->skill_subhealup.count == MAX_SKILL_HEAL_UP)
+					break;
+				// add
+				sd->skill_subhealup.id[sd->skill_subhealup.count] = skill[j];
+				sd->skill_subhealup.rate[sd->skill_subhealup.count] = val;
+				sd->skill_subhealup.count++;
 			}
-			// full
-			if(sd->skill_subhealup.count == MAX_SKILL_HEAL_UP)
-				break;
-			// add
-			sd->skill_subhealup.id[sd->skill_subhealup.count] = type2;
-			sd->skill_subhealup.rate[sd->skill_subhealup.count] = val;
-			sd->skill_subhealup.count++;
 		}
 		break;
 	case 170:
