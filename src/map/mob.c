@@ -1511,14 +1511,16 @@ static int mob_delay_item_drop(int tid,unsigned int tick,int id,void *data)
 	if(ditem->randopt) {
 		struct randopt_item_data ro = itemdb_randopt_data(ditem->randopt, temp_item.nameid);
 		if(ro.nameid) {
-			int i, slot;
+			int i, slot = 0;
 			int rate = 0;
 			for(i = 0; i < sizeof(ro.opt) / sizeof(ro.opt[0]); i++) {
+				if(ro.opt[i].slot != slot)
+					rate = 0;
 				slot = ro.opt[i].slot;
-				if(temp_item.opt[slot].id)
+				if(temp_item.opt[slot].id > 0)
 					continue;
 				rate += ro.opt[i].rate;
-				if(rate < atn_rand()%10000) {
+				if(rate >= atn_rand()%10000) {
 					temp_item.opt[slot].id = ro.opt[i].optid;
 					if(ro.opt[i].optval_min != ro.opt[i].optval_max)
 						temp_item.opt[slot].val = ro.opt[i].optval_min + atn_rand() % (ro.opt[i].optval_max - ro.opt[i].optval_min + 1);

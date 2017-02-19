@@ -1037,7 +1037,7 @@ int itemdb_insert_randoptdb(struct randopt_item_data ro)
 
 	randopt_item[randopt_init - 1] = ro;
 
-	printf("read item_randopt_db.lua done (count=%d)\n\r", randopt_init);
+	printf("read db/item_randopt_db.lua done (count=%d)\n\r", randopt_init);
 	return 0;
 }
 
