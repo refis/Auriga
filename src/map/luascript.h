@@ -28,17 +28,18 @@ lua_State *L;
 
 extern int lua_respawn_id;
 enum {
-	L_NRUN  = 0,
-	L_CLOSE,
-	L_NEXT,
+	L_RUN  = 0,
+	L_STOP,
 	L_INPUT,
 	L_MENU,
+	L_CLOSE,
 	L_END
 };
 
-int lua_run_function(const char *name,int char_id,const char *format,...);
+int luascript_run_function(const char *name,int char_id,const char *format,...);
+void luascript_resume(struct map_session_data *sd,const char *format,...);
 
-void lua_reload(void);
+void luascript_reload(void);
 
 int do_init_luascript(void);
 int do_final_luascript(void);

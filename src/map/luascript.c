@@ -22,15 +22,24 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#ifndef WINDOWS
+	#include <sys/time.h>
+#endif
 #include <time.h>
+#include <math.h>
 
 #include "timer.h"
+#include "malloc.h"
+#include "nullpo.h"
 #include "utils.h"
+#include "sqldbs.h"
 
 #include "map.h"
 #include "npc.h"
 #include "mob.h"
 #include "itemdb.h"
+#include "clif.h"
 #include "luascript.h"
 
 #include "lua.h"
@@ -39,7 +48,7 @@
 
 static int garbage_collect_interval = 100*20;		// ガベージコレクトの間隔
 
-char lua_conf_filename[256] = "conf/lua_auriga.conf";
+char luascript_conf_filename[256] = "conf/lua_auriga.conf";
 
 int lua_respawn_id;
 int gc_threshold = 1000;		// ガベージコレクトの閾値
@@ -131,10 +140,48 @@ void show_table_item(lua_State *L, const char *key, int index)
 }
 
 /*==========================================
+ * NLからsdへ変換
+ *------------------------------------------
+ */
+static struct map_session_data *luascript_nl2sd(lua_State *NL)
+{
+	int char_id;
+	struct map_session_data *sd=NULL;
+
+	lua_pushliteral(NL, "char_id");
+	lua_rawget(NL, LUA_GLOBALSINDEX);
+	char_id = (int)lua_tointeger(NL, -1);
+	lua_pop(NL, 1);
+
+	sd = map_id2sd(char_id);
+
+	if(!sd){
+		printf("luascript_nl2sd: fatal error ! player not attached!\n");
+	}
+	return sd;
+}
+
+/*==========================================
+ * NLからoidへ変換
+ *------------------------------------------
+ */
+static int luascript_nl2oid(lua_State *NL)
+{
+	int oid;
+
+	lua_pushliteral(NL, "oid");
+	lua_rawget(NL, LUA_GLOBALSINDEX);
+	oid = (int)lua_tointeger(NL, -1);
+	lua_pop(NL, 1);
+
+	return oid;
+}
+
+/*==========================================
  * functionの実行
  *------------------------------------------
  */
-int lua_run_function(const char *name,int char_id,const char *format,...)
+int luascript_run_function(const char *name,int char_id,const char *format,...)
 {
 	struct block_list *bl = NULL;
 	struct map_session_data *sd;
@@ -152,12 +199,15 @@ int lua_run_function(const char *name,int char_id,const char *format,...)
 	else {	// それ以外ならコルーチンで実行する
 		if((sd = map_id2sd(char_id)) == NULL)
 			return 0;
-		if(sd->lua_script_state!=L_NRUN) {
-			//printf("lua_run_function: %s for player %d : player is already running a script\n",name,char_id);
+		if(sd->lua_state != L_RUN) {
+			printf("lua_run_function: %s for player %d : player is already running a script\n",name,char_id);
 			return 0;
 		}
 		luaL_checkstack(L,1,"Too many thread");
 		NL = sd->NL = lua_newthread(L);
+		lua_pushliteral(NL,"char_id");
+		lua_pushnumber(NL,char_id);
+		lua_rawset(NL,LUA_GLOBALSINDEX);
 	}
 
 	lua_getglobal(NL,name);		// functionをスタックに積む
@@ -178,12 +228,13 @@ int lua_run_function(const char *name,int char_id,const char *format,...)
 	va_end(ap);
 
 	// functionの実行
-	if(lua_resume(NL,n) != 0 && lua_tostring(NL,-1) != NULL) {
-		printf("lua_run_function: can't run function %s : %s\n",name,lua_tostring(NL,-1));
+	if(lua_resume(NL,n) > 1 && lua_tostring(NL,-1) != NULL) {
+		printf("luascript_run_function: can't run function %s : %s\n",name,lua_tostring(NL,-1));
 		return 0;
 	}
 
-	if(sd && sd->lua_script_state==L_NRUN) {
+	if(sd && (sd->lua_state == L_RUN || sd->lua_state == L_END)) {
+	    sd->lua_state = L_RUN;
 	    sd->NL=NULL;
 		sd->npc_id=0;
 	}
@@ -195,20 +246,19 @@ int lua_run_function(const char *name,int char_id,const char *format,...)
  * chank実行
  *------------------------------------------
  */
-static void lua_addscript(const char *chunk)
+static void luascript_addscript(const char *chunk)
 {
 	lua_State *NL;
 
 	NL = lua_newthread(L);
 
+	lua_pushliteral(NL,"char_id");
+	lua_pushnumber(NL,0);
+	lua_rawset(NL,LUA_GLOBALSINDEX);
+
 	luaL_loadfile(NL,chunk);
 	if(lua_pcall(NL,0,2,0) != 0) {
 		printf("Cannot run chunk %s : %s\n",chunk,lua_tostring(NL,-1));
-		return;
-	}
-	lua_getglobal(NL,"main");		// functionをスタックに積む
-	if(lua_pcall(NL,0,2,0) != 0 && lua_tostring(NL,-1) != NULL) {
-		printf("lua_run_function: can't run function %s : %s\n",chunk,lua_tostring(NL,-1));
 		return;
 	}
 
@@ -223,11 +273,11 @@ void luascript_resume(struct map_session_data *sd,const char *format,...) {
 	va_list arg;
 	int n=0;
 
-	if(sd->lua_script_state==L_NRUN) { // Check that the player is currently running a script
+	if(sd->lua_state == L_RUN) { // Check that the player is currently running a script
 		printf("Cannot resume script for player %d : player is not running a script\n",sd->status.char_id);
 		return;
 	}
-	sd->lua_script_state=L_NRUN; // Set the script flag as 'not waiting for anything'
+	sd->lua_state = L_RUN; // Set the script flag as 'not waiting for anything'
 
 	va_start(arg,format); // Initialize the argument list
 	while(*format) { // Pass arguments to Lua, according to the types defined by "format"
@@ -245,12 +295,13 @@ void luascript_resume(struct map_session_data *sd,const char *format,...) {
 	va_end(arg);
 
 	/*Attempt to run the function otherwise print the error to the console.*/
-	if(lua_resume(sd->NL,n) != 0 && lua_tostring(sd->NL,-1) != NULL) {
+	if(lua_resume(sd->NL,n) > 1 && lua_tostring(sd->NL,-1) != NULL) {
 		printf("Cannot resume script for player %d : %s\n",sd->status.char_id,lua_tostring(sd->NL,-1));
 		return;
 	}
 
-	if(sd->lua_script_state == L_NRUN) { // If the script has finished (not waiting answer from client)
+	if(sd->lua_state == L_RUN || sd->lua_state == L_END) { // If the script has finished (not waiting answer from client)
+	    sd->lua_state = L_RUN;
 		sd->NL = NULL; // Close the player's personal thread
 		sd->npc_id = 0; // Set the player's current NPC to 'none'
 		sd->areanpc_id = 0;
@@ -261,7 +312,7 @@ void luascript_resume(struct map_session_data *sd,const char *format,...) {
  * CのファンクションをLuaへ登録
  *------------------------------------------
  */
-static void lua_register_function(void)
+static void luascript_register_function(void)
 {
 	int i;
 
@@ -279,7 +330,7 @@ static void lua_register_function(void)
  * ガベージコレクタTimer
  *------------------------------------------
  */
-static int lua_garbagecollect(int tid,unsigned int tick,int id,void *data)
+static int luascript_garbagecollect(int tid,unsigned int tick,int id,void *data)
 {
 	int dummy = 0;	// 実際には使わないダミー
 	int v = lua_gc(L, LUA_GCCOUNT, dummy);	// Luaの使用メモリ取得（キロバイト単位）
@@ -303,7 +354,7 @@ static int lua_garbagecollect(int tid,unsigned int tick,int id,void *data)
  * 設定ファイルを読み込む
  *------------------------------------------
  */
-static int lua_config_read(const char *cfgName)
+static int luascript_config_read(const char *cfgName)
 {
 	char line[1024], w1[1024], w2[1024];
 	FILE *fp;
@@ -324,9 +375,9 @@ static int lua_config_read(const char *cfgName)
 			continue;
 
 		if (strcmpi(w1, "lua") == 0) {
-			lua_addscript(w2);
+			luascript_addscript(w2);
 //		} else if (strcmpi(w1, "dellua") == 0) {
-//			lua_delscript(w2);
+//			luascript_delscript(w2);
 		} else if (strcmpi(w1, "garbage_collect_interval") == 0) {
 			garbage_collect_interval = atoi(w2);
 			if (garbage_collect_interval < 0) {
@@ -334,7 +385,7 @@ static int lua_config_read(const char *cfgName)
 				garbage_collect_interval = 0;
 			}
 		} else if (strcmpi(w1, "import") == 0) {
-			lua_config_read(w2);
+			luascript_config_read(w2);
 		}
 	}
 	fclose(fp);
@@ -346,7 +397,7 @@ static int lua_config_read(const char *cfgName)
  * Luaのリロード
  *------------------------------------------
  */
-void lua_reload(void)
+void luascript_reload(void)
 {
 	// 再読み込み中にステートメントを呼ばれると困るのでロックする
 	lua_lock_script = 1;
@@ -362,8 +413,11 @@ void lua_reload(void)
 	L = lua_open();
 	luaL_openlibs(L);
 
-	lua_register_function();
-	lua_config_read(lua_conf_filename);
+	luascript_register_function();
+	lua_pushliteral(L,"char_id");
+	lua_pushnumber(L,0);
+	lua_rawset(L,LUA_GLOBALSINDEX);
+	luascript_config_read(luascript_conf_filename);
 
 	// ロック解除
 	lua_lock_script = 0;
@@ -379,12 +433,15 @@ int do_init_luascript(void)
 	L = lua_open();
 	luaL_openlibs(L);
 
-	lua_register_function();
-	lua_config_read(lua_conf_filename);
+	luascript_register_function();
+	lua_pushliteral(L,"char_id");
+	lua_pushnumber(L,0);
+	lua_rawset(L,LUA_GLOBALSINDEX);
+	luascript_config_read(luascript_conf_filename);
 
 	if(garbage_collect_interval > 0) {
-		add_timer_func_list(lua_garbagecollect);
-		add_timer_interval(gettick() + garbage_collect_interval,lua_garbagecollect,0,NULL,garbage_collect_interval);
+		add_timer_func_list(luascript_garbagecollect);
+		add_timer_interval(gettick() + garbage_collect_interval,luascript_garbagecollect,0,NULL,garbage_collect_interval);
 	}
 
 	return 0;
@@ -477,8 +534,207 @@ static int luafunc_addrandopt(lua_State *NL)
 	return 0;
 }
 
+//
+// script
+//
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+static int luafunc_npcspawn(lua_State *NL)
+{
+	char name[50],map[24],function[50] = "";
+	short x,y,dir,class_;
+
+	sprintf(map, "%s", luaL_checkstring(NL,1));
+	x=luaL_checkint(NL,2);
+	y=luaL_checkint(NL,3);
+	dir=luaL_checkint(NL,4);
+	sprintf(name, "%s", luaL_checkstring(NL,5));
+	class_=luaL_checkint(NL,6);
+	sprintf(function, "%s", luaL_checkstring(NL,7));
+
+	lua_pushinteger(NL,npc_addspawn_lua(map,x,y,dir,name,class_,function));
+	return 1;
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+static int luafunc_npctouch(lua_State *NL)
+{
+	char name[24],function[50] = "";
+	short xs,ys;
+
+	sprintf(name, "%s", luaL_checkstring(NL,1));
+	xs=luaL_checkint(NL,2);
+	ys=luaL_checkint(NL,3);
+	sprintf(function, "%s", luaL_checkstring(NL,4));
+
+	lua_pushinteger(NL,npc_addtouch_lua(name,xs,ys,function));
+	return 1;
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+static int luafunc_mes(lua_State *NL)
+{
+	struct map_session_data *sd = luascript_nl2sd(NL);
+	if(luaL_checkstring(NL,1))
+		clif_scriptmes(sd,sd->npc_id,luaL_checkstring(NL,1));
+	return 0;
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+int luafunc_next(lua_State *NL)
+{
+	struct map_session_data *sd = luascript_nl2sd(NL);
+	sd->lua_state=L_STOP;
+	clif_scriptnext(sd,sd->npc_id);
+	return lua_yield(NL, 0);
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+int luafunc_close(lua_State *NL)
+{
+	struct map_session_data *sd = luascript_nl2sd(NL);
+	sd->lua_state=L_CLOSE;
+	clif_scriptclose(sd,sd->npc_id);
+	return lua_yield(NL, 0);
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+int luafunc_close2(lua_State *NL)
+{
+	struct map_session_data *sd = luascript_nl2sd(NL);
+	sd->lua_state=L_STOP;
+	clif_scriptclose(sd,sd->npc_id);
+	return lua_yield(NL, 0);
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+int luafunc_clear(lua_State *NL)
+{
+	struct map_session_data *sd = luascript_nl2sd(NL);
+	clif_scriptclear(sd,sd->npc_id);
+	return 0;
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+int luafunc_select(lua_State *NL)
+{
+	int i,top;
+	struct map_session_data *sd = luascript_nl2sd(NL);
+	top = lua_gettop(NL);
+
+	if(sd == NULL) {
+		lua_pushnil(NL);
+		return 1;
+	}
+
+	if(sd->state.menu_or_input == 0) {
+		char *buf;
+		sd->state.menu_or_input = 1;
+		sd->lua_state = L_MENU;
+
+		if(top > 1) {
+			size_t len = 0;
+			size_t t_len = 0;
+			for(i=1; i<=top; i++) {
+				luaL_checklstring(NL,i,&len);
+				t_len += len + 1;
+			}
+			buf = (char *)aCalloc(t_len + 1, sizeof(char));
+			for(i=1; i<=top; i++) {
+				if(luaL_checkstring(NL,i)) {
+					if(buf[0]) {
+						strcat(buf,":");
+					}
+					strcat(buf,luaL_checkstring(NL,i));
+				}
+			}
+			sd->npc_menu = top;
+			clif_scriptmenu(sd,sd->npc_id,buf);
+			aFree(buf);
+		} else {
+			sd->npc_menu = 1;
+			clif_scriptmenu(sd,sd->npc_id,luaL_checkstring(NL,1));
+		}
+	}
+	return lua_yield(NL,0);
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+int luafunc_input(lua_State *NL)
+{
+	struct map_session_data *sd = luascript_nl2sd(NL);
+	int num;
+
+	if(sd == NULL) {	// エラー扱いにする
+		sd->lua_state = L_END;
+		return 0;
+	}
+
+	num = luaL_checkint(NL,1);
+	switch(num){
+	default:
+		clif_scriptinput(sd,sd->npc_id);
+		break;
+	case 2:
+		clif_scriptinputstr(sd,sd->npc_id);
+		break;
+	}
+
+	sd->state.menu_or_input = 1;
+	sd->lua_state = L_INPUT;
+	return lua_yield(NL, 1);
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+int luafunc_fin(lua_State *NL)
+{
+	struct map_session_data *sd = luascript_nl2sd(NL);
+	sd->lua_state = L_END;
+	return 0;
+}
 
 const struct Lua_function luafunc[] = {
 	{"addrandopt",luafunc_addrandopt},
+
+	{"npcspawn",luafunc_npcspawn},
+	{"npctouch",luafunc_npctouch},
+	{"mes",luafunc_mes},
+	{"next",luafunc_next},
+	{"close",luafunc_close},
+	{"close2",luafunc_close2},
+	{"clear",luafunc_clear},
+	{"select",luafunc_select},
+	{"input",luafunc_input},
+	{"fin",luafunc_fin},
 	{NULL,NULL}
 };

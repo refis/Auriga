@@ -71,4 +71,8 @@ int npc_timeout_stop(struct map_session_data *sd);
 int npc_addmdnpc(struct npc_data *src_nd, int m);
 int npc_free(struct npc_data *nd);
 
+// lua関連
+int npc_addspawn_lua(const char *map,int x,int y,int dir,const char *name,int class_,const char *function);
+int npc_addtouch_lua(const char *name,int xs,int ys,const char *function);
+
 #endif

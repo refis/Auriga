@@ -72,6 +72,7 @@
 #include "buyingstore.h"
 #include "elem.h"
 #include "bank.h"
+#include "luascript.h"
 
 /* パケットデータベース */
 #define MAX_PACKET_DB 0xA90
@@ -19528,9 +19529,21 @@ static void clif_parse_WeaponRefine(int fd,struct map_session_data *sd, int cmd)
 static void clif_parse_NpcSelectMenu(int fd,struct map_session_data *sd, int cmd)
 {
 	nullpo_retv(sd);
-
 	sd->npc_menu=RFIFOB(fd,GETPACKETPOS(cmd,1));
-	npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,0)));
+	if(sd->lua_state == L_MENU) {
+		if(sd->npc_menu == 0xff) {
+			sd->state.menu_or_input = 0;
+			sd->lua_state = L_RUN;
+			sd->NL = NULL;
+			sd->npc_id = 0;
+			sd->areanpc_id = 0;
+			return;
+		}
+		sd->state.menu_or_input = 0;
+		luascript_resume(sd,"i",sd->npc_menu);
+	}
+	else
+		npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,0)));
 
 	return;
 }
@@ -19541,7 +19554,10 @@ static void clif_parse_NpcSelectMenu(int fd,struct map_session_data *sd, int cmd
  */
 static void clif_parse_NpcNextClicked(int fd,struct map_session_data *sd, int cmd)
 {
-	npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,0)));
+	if(sd->lua_state == L_STOP)
+		luascript_resume(sd,"");
+	else
+		npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,0)));
 
 	return;
 }
@@ -19555,7 +19571,12 @@ static void clif_parse_NpcAmountInput(int fd,struct map_session_data *sd, int cm
 	nullpo_retv(sd);
 
 	sd->npc_amount = (int)RFIFOL(fd,GETPACKETPOS(cmd,1));
-	npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,0)));
+	if(sd->lua_state == L_INPUT) {
+		sd->state.menu_or_input = 0;
+		luascript_resume(sd,"i",sd->npc_amount);
+	}
+	else
+		npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,0)));
 
 	return;
 }
@@ -19585,7 +19606,12 @@ static void clif_parse_NpcStringInput(int fd,struct map_session_data *sd, int cm
 		strncpy(sd->npc_str, RFIFOP(fd,GETPACKETPOS(cmd,2)), sizeof(sd->npc_str));
 	}
 	sd->npc_str[sizeof(sd->npc_str) - 1] = 0;
-	npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,1)));
+	if(sd->lua_state == L_INPUT) {
+		sd->state.menu_or_input = 0;
+		luascript_resume(sd,"s",sd->npc_str);
+	}
+	else
+		npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,1)));
 
 	return;
 }
@@ -19596,7 +19622,11 @@ static void clif_parse_NpcStringInput(int fd,struct map_session_data *sd, int cm
  */
 static void clif_parse_NpcCloseClicked(int fd,struct map_session_data *sd, int cmd)
 {
-	npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,0)));
+	if(sd->lua_state == L_STOP || sd->lua_state == L_CLOSE) {
+		luascript_resume(sd,"");
+	}
+	else
+		npc_scriptcont(sd,RFIFOL(fd,GETPACKETPOS(cmd,0)));
 
 	return;
 }

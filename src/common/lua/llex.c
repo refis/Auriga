@@ -286,6 +286,14 @@ static void read_string (LexState *ls, int del, SemInfo *seminfo) {
         continue;  /* to avoid warnings */
       case '\\': {
         int c;
+        char w;
+        if ((luaZ_bufflen(ls->buff) > (size_t)0) && (w = ((ls->buff->buffer[luaZ_bufflen(ls->buff) - (size_t)1]) & 0xff))) {
+          if ((((0x81 <= ((w) & 0xff)) && (((w) & 0xff) <= 0x9f)) || ((0xe0 <= ((w) & 0xff)) && (((w) & 0xff) <= 0xef)))) {
+            save(ls, '\\');
+            next(ls);
+            continue;
+          }
+        }
         next(ls);  /* do not save the `\' */
         switch (ls->current) {
           case 'a': c = '\a'; break;

@@ -456,7 +456,7 @@ struct map_session_data {
 
 	char wis_refusal[MAX_WIS_REFUSAL][24];	// Wis拒否リスト
 
-	int lua_script_state;
+	int lua_state;
 	lua_State *NL;
 
 	struct {
@@ -884,6 +884,8 @@ struct npc_data {
 	short view_size;
 	char flag;
 	unsigned char subtype;
+	char func[50];
+	char touchfunc[50];
 	union {
 		struct {
 			struct script_code *script;

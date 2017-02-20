@@ -48,6 +48,7 @@
 #include "unit.h"
 #include "status.h"
 #include "memorial.h"
+#include "luascript.h"
 
 struct npc_src_list {
 	struct npc_src_list * next;
@@ -696,9 +697,14 @@ int npc_touch_areanpc(struct map_session_data *sd,int m,int x,int y)
 			if(sd->areanpc_id == nd->bl.id)
 				return 1;
 			sd->areanpc_id = nd->bl.id;
-			sprintf(name, "%s::OnTouch", nd->exname);
-			if(npc_event(sd,name) > 0)
-				npc_click(sd,nd->bl.id);
+			if(nd->touchfunc[0]) {
+				luascript_run_function(nd->touchfunc,sd->bl.id,"ii",sd->bl.id,nd->bl.id);
+			}
+			else {
+				sprintf(name, "%s::OnTouch", nd->exname);
+				if(npc_event(sd,name) > 0)
+					npc_click(sd,nd->bl.id);
+			}
 		}
 		break;
 	}
@@ -874,6 +880,10 @@ void npc_click(struct map_session_data *sd, int id)
 		if(nd->u.scr.script) {
 			sd->npc_id = id;
 			run_script(nd->u.scr.script,0,sd->bl.id,id);
+		}
+		else if(nd->func[0]) {
+			sd->npc_id = id;
+			luascript_run_function(nd->func,sd->bl.id,"ii",sd->bl.id,nd->bl.id);
 		}
 		break;
 	}
@@ -1345,6 +1355,8 @@ int npc_addmdnpc(struct npc_data *src_nd, int m)
 	nd->option  = OPTION_NOTHING;
 	nd->bl.type = BL_NPC;
 	nd->subtype = src_nd->subtype;
+	nd->func[0] = '\0';
+	nd->touchfunc[0] = '\0';
 
 	switch(nd->subtype) {
 	case SCRIPT:
@@ -1714,6 +1726,8 @@ static int npc_parse_warp(const char *w1,const char *w2,const char *w3,const cha
 	npc_warp++;
 	nd->bl.type = BL_NPC;
 	nd->subtype = WARP;
+	nd->func[0] = '\0';
+	nd->touchfunc[0] = '\0';
 	map_addblock(&nd->bl);
 	clif_spawnnpc(nd);
 	strdb_insert(npcname_db,nd->exname,nd);
@@ -1868,6 +1882,8 @@ static int npc_parse_shop(const char *w1,const char *w2,const char *w3,const cha
 	nd->speed   = 200;
 	nd->chat_id = 0;
 	nd->option  = OPTION_NOTHING;
+	nd->func[0] = '\0';
+	nd->touchfunc[0] = '\0';
 	npc_shop++;
 	nd->bl.type = BL_NPC;
 	nd->subtype = subtype;
@@ -2197,6 +2213,8 @@ static int npc_parse_script(const char *w1,const char *w2,const char *w3,const c
 	nd->u.scr.src_id = src_id;
 	nd->chat_id = 0;
 	nd->option  = OPTION_NOTHING;
+	nd->func[0] = '\0';
+	nd->touchfunc[0] = '\0';
 
 	npc_script++;
 	nd->bl.type = BL_NPC;
@@ -2812,6 +2830,158 @@ static int npc_parse_srcfile(const char *filepath)
 	parse_script_line_curly(NULL, 0, 0);	// scriptブロック内部のcomment_flagを初期化
 
 	return 1;
+}
+
+/*==========================================
+ * luaからのNPC読み込み
+ *------------------------------------------
+ */
+int npc_addspawn_lua(const char *map,int x,int y,int dir, const char *name,int class_,const char *function)
+{
+	int m,fail = 0;
+	char *p;
+	struct npc_data *nd;
+	struct npc_label_list *label_dup = NULL;
+
+	if(strcmp(map,"-") != 0) {
+		size_t len;
+		len = strlen(map);
+		if(len <= 4 || len > 24 || strcmp(map+len-4,".gat") != 0) {
+			printf("lua npc file syntax error");
+			return 1;
+		}
+		m = map_mapname2mapid(map);
+	} else {
+		x = 0;
+		y = 0;
+		m = -1;
+	}
+
+	nd = (struct npc_data *)aCalloc(1,sizeof(struct npc_data));
+	nd->u.scr.xs = 0;
+	nd->u.scr.ys = 0;
+
+	p = strstr(name,"::");
+	if(p) {
+		char *p2;
+		*p = 0;
+		p += 2;
+		if((p2 = strstr(p,"::")) != NULL) {
+			*p2 = 0;
+		}
+		strncpy(nd->name,name,24);
+		strncpy(nd->exname,p,24);
+	} else {
+		strncpy(nd->name,name,24);
+		strncpy(nd->exname,name,24);
+	}
+	nd->name[23]   = '\0';
+	nd->exname[23] = '\0';
+
+	nd->bl.prev = nd->bl.next = NULL;
+	nd->bl.m    = m;
+	nd->bl.x    = x;
+	nd->bl.y    = y;
+	nd->bl.id   = npc_get_new_npc_id();
+	nd->dir     = dir;
+	nd->flag    = 0;
+	nd->class_  = class_;
+	nd->speed   = 200;
+	nd->u.scr.script = NULL;
+	nd->u.scr.src_id = 0;
+	nd->chat_id = 0;
+	nd->option  = OPTION_NOTHING;
+	strncpy(nd->func,function,50);
+	nd->func[49] = '\0';
+	nd->touchfunc[0] = '\0';
+
+	npc_script++;
+	nd->bl.type = BL_NPC;
+	nd->subtype = SCRIPT;
+
+	if(m >= 0) {
+		map_addblock(&nd->bl);
+		map_addiddb(&nd->bl);
+
+		if(class_ < 0) {	// イベント型
+			struct event_data *ev, *old_ev;
+			ev       = (struct event_data *)aCalloc(1,sizeof(struct event_data));
+			ev->key  = NULL;
+			ev->nd   = nd;
+			ev->pos  = 0;
+			ev->next = NULL;
+			old_ev   = (struct event_data *)strdb_insert(ev_db,nd->exname,ev);
+			if(old_ev) {
+				// イベントが重複している場合。ここでreturnすると以前の処理が
+				// 中途半端になる為、処理を続行する。
+				printf("npc_parse_script : dup event name %s\n",nd->exname);
+				aFree(old_ev);
+				fail = 1;
+			}
+		} else {
+			clif_spawnnpc(nd);
+		}
+	} else {
+		map_addiddb(&nd->bl);
+	}
+	strdb_insert(npcname_db,nd->exname,nd);
+
+	nd->u.scr.nexttimer = -1;
+	nd->u.scr.timerid   = -1;
+
+	if(fail) {
+		// データを正常に復帰できないのでサーバ終了
+		exit(1);
+	}
+
+	return 0;
+}
+
+/*==========================================
+ * luaからのOnTouch読み込み
+ *------------------------------------------
+ */
+int npc_addtouch_lua(const char *name,int xs,int ys,const char *function)
+{
+	struct npc_data *nd;
+
+	nd = npc_name2id(name);
+	if(nd == NULL) {
+		printf("bad addtouch name! (not exist) : %s\a\n",name);
+		return 1;
+	}
+
+	if(nd->bl.m < 0) {	// assignされてないMAPなので終了
+		return 1;
+	}
+	if(nd->subtype != SCRIPT) {
+		printf("bad addtouch name! (not script) : %s\a\n",name);
+		return 1;
+	}
+
+	// 接触型NPC
+	if(xs >= 0) xs = xs * 2 + 1;
+	if(ys >= 0) ys = ys * 2 + 1;
+
+	if(nd->class_ >= 0) {
+		int i, j;
+		for(i=0; i<ys; i++) {
+			for(j=0; j<xs; j++) {
+				if(map_getcell(nd->bl.m,nd->bl.x-xs/2+j,nd->bl.y-ys/2+i,CELL_CHKNOPASS))
+					continue;
+				map_setcell(nd->bl.m,nd->bl.x-xs/2+j,nd->bl.y-ys/2+i,CELL_SETNPC);
+			}
+		}
+	}
+	nd->u.scr.xs  = xs;
+	nd->u.scr.ys  = ys;
+	strncpy(nd->touchfunc,function,50);
+	nd->touchfunc[49] = '\0';
+
+	if(nd->u.scr.xs > 0 && nd->u.scr.ys > 0)	// 接触型なので登録
+		nd->n = map_addnpc(nd->bl.m,nd);
+
+	return 0;
 }
 
 /*==========================================
