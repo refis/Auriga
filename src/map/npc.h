@@ -74,5 +74,7 @@ int npc_free(struct npc_data *nd);
 // lua関連
 int npc_addspawn_lua(const char *map,int x,int y,int dir,const char *name,int class_,const char *function);
 int npc_addtouch_lua(const char *name,int xs,int ys,const char *function);
+int npc_warpspawn_lua(const char *map,int x,int y,const char *name,int xs,int ys,const char *to_map,int to_x,int to_y,const char *function);
+int npc_mobspawn_lua(const char *map,int x,int y,int xs,int ys,const char *name,int class_,int num,int delay1,int delay2,const char *function,int guild_id);
 
 #endif

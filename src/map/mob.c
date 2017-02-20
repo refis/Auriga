@@ -53,6 +53,7 @@
 #include "merc.h"
 #include "quest.h"
 #include "elem.h"
+#include "luascript.h"
 
 #define MOB_LAZYMOVEPERC     50		// 手抜きモードMOBの移動確率（千分率）
 #define MOB_LAZYWARPPERC     20		// 手抜きモードMOBのワープ確率（千分率）
@@ -217,6 +218,7 @@ int mob_once_spawn(struct map_session_data *sd,int m,
 		md->ys = 0;
 		md->spawndelay1  = -1;	// 一度のみフラグ
 		md->spawndelay2  = -1;	// 一度のみフラグ
+		md->luascript    = 0;
 		md->state.nodrop = 0;
 		md->state.noexp  = 0;
 		md->state.nomvp  = 0;
@@ -2354,8 +2356,12 @@ static int mob_dead(struct block_list *src,struct mob_data *md,int type,unsigned
 					}
 				}
 			}
-			if(ssd)
-				npc_event(ssd,md->npc_event);
+			if(ssd) {
+				if(md->luascript)
+					luascript_run_function(md->npc_event,ssd->bl.id,"ii",ssd->bl.id,md->bl.id);
+				else
+					npc_event(ssd,md->npc_event);
+			}
 		}
 	}
 
@@ -2847,6 +2853,7 @@ int mob_summonslave(struct mob_data *md2,int *value,int size,int amount,int flag
 		md->ys          = 0;
 		md->spawndelay1 = -1;	// 一度のみフラグ
 		md->spawndelay2 = -1;	// 一度のみフラグ
+		md->luascript   = 0;
 		md->ai_pc_count = 0;
 		md->ai_prev = md->ai_next = NULL;
 

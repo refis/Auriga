@@ -689,6 +689,10 @@ int npc_touch_areanpc(struct map_session_data *sd,int m,int x,int y)
 		if(pc_ishiding(sd))
 			break;
 		skill_stop_dancing(&sd->bl,0);
+		if(nd->touchfunc[0]) {
+			sd->areanpc_id = nd->bl.id;
+			luascript_run_function(nd->touchfunc,sd->bl.id,"ii",sd->bl.id,nd->bl.id);
+		}
 		pc_setpos(sd,nd->u.warp.name,nd->u.warp.x,nd->u.warp.y,0);
 		break;
 	case SCRIPT:
@@ -2468,6 +2472,7 @@ static int npc_parse_mob(const char *w1,const char *w2,const char *w3,const char
 		md->ys          = ys;
 		md->spawndelay1 = delay1;
 		md->spawndelay2 = delay2;
+		md->luascript   = 0;
 
 		memset(&md->state,0,sizeof(md->state));
 		md->target_id   = 0;
@@ -2980,6 +2985,225 @@ int npc_addtouch_lua(const char *name,int xs,int ys,const char *function)
 
 	if(nd->u.scr.xs > 0 && nd->u.scr.ys > 0)	// 接触型なので登録
 		nd->n = map_addnpc(nd->bl.m,nd);
+
+	return 0;
+}
+
+/*==========================================
+ * luaからのwarp読み込み
+ *------------------------------------------
+ */
+int npc_warpspawn_lua(const char *map,int x,int y,const char *name,int xs,int ys,const char *to_map,int to_x,int to_y,const char *function)
+{
+	int m, dir = 0;
+	int i, j;
+	char *p;
+	struct npc_data *nd;
+
+	m = map_mapname2mapid(map);
+	if(m < 0)
+		return 0;	// assignされてないMAPなので終了
+
+	nd = (struct npc_data *)aCalloc(1,sizeof(struct npc_data));
+	nd->bl.id = npc_get_new_npc_id();
+	nd->n     = map_addnpc(m,nd);
+
+	nd->bl.prev = nd->bl.next = NULL;
+	nd->bl.m = m;
+	nd->bl.x = x;
+	nd->bl.y = y;
+	nd->dir  = dir;
+	nd->flag = 0;
+
+	p = strstr(name,"::");
+	if(p) {
+		char *p2;
+		*p = 0;
+		p += 2;
+		if((p2 = strstr(p,"::")) != NULL) {
+			*p2 = 0;
+		}
+		strncpy(nd->name,name,24);
+		strncpy(nd->exname,p,24);
+	} else {
+		strncpy(nd->name,name,24);
+		strncpy(nd->exname,name,24);
+	}
+	nd->name[23]   = '\0';
+	nd->exname[23] = '\0';
+
+	nd->chat_id = 0;
+	if (!battle_config.warp_point_debug)
+		nd->class_ = WARP_CLASS;
+	else
+		nd->class_ = WARP_DEBUG_CLASS;
+	nd->speed  = 200;
+	nd->option = OPTION_NOTHING;
+	memcpy(nd->u.warp.name,to_map,16);
+	nd->u.warp.name[15] = '\0';	// force \0 terminal
+	xs += 2;
+	ys += 2;
+	nd->u.warp.x  = to_x;
+	nd->u.warp.y  = to_y;
+	nd->u.warp.xs = xs;
+	nd->u.warp.ys = ys;
+
+	for(i=0; i<ys; i++) {
+		for(j=0; j<xs; j++) {
+			if(map_getcell(m,x-xs/2+j,y-ys/2+i,CELL_CHKNOPASS))
+				continue;
+			map_setcell(m,x-xs/2+j,y-ys/2+i,CELL_SETNPC);
+		}
+	}
+
+	npc_warp++;
+	nd->bl.type = BL_NPC;
+	nd->subtype = WARP;
+	nd->func[0] = '\0';
+	strncpy(nd->touchfunc,function,50);
+	nd->touchfunc[49] = '\0';
+	map_addblock(&nd->bl);
+	clif_spawnnpc(nd);
+	strdb_insert(npcname_db,nd->exname,nd);
+
+	return 0;
+}
+
+/*==========================================
+ * luaからのmob読み込み
+ *------------------------------------------
+ */
+int npc_mobspawn_lua(const char *mapname,int x,int y,int xs,int ys,const char *name,int class_,int num,int delay1,int delay2,const char *function,int guild_id)
+{
+	int m, i;
+	char eventname[50] = "";
+	struct mob_data *md;
+
+	m = map_mapname2mapid(mapname);
+	if(m < 0)
+		return 0;	// assignされてないMAPなので終了
+
+	if(!mobdb_checkid(class_)) {
+		// 定期沸きでID異常は注意を促す
+		printf("npc_monster bad class: %d\a\n",class_);
+		return 0;
+	}
+
+	if(function[0]) {
+		if(isdigit((unsigned char)function[0]) && function[1] == 0) {
+			// 数字1文字だけの場合はイベント指定無しとして扱う（何もしない）
+			;
+		} else {
+			strncpy(eventname,function,50);
+		}
+	}
+	if(num > 1 && battle_config.mob_count_rate != 100) {
+		if((num = num * battle_config.mob_count_rate / 100) < 1)
+			num = 1;
+	}
+
+	if(mob_db[class_].mode & MD_BOSS) {
+		if(mob_db[class_].mexp > 0) {
+			if(battle_config.mob_mvp_boss_delay_rate != 100) {
+				delay1 = delay1 * battle_config.mob_mvp_boss_delay_rate / 100;
+				delay2 = delay2 * battle_config.mob_mvp_boss_delay_rate / 100;
+			}
+		} else {
+			if(battle_config.mob_middle_boss_delay_rate != 100) {
+				delay1 = delay1 * battle_config.mob_middle_boss_delay_rate / 100;
+				delay2 = delay2 * battle_config.mob_middle_boss_delay_rate / 100;
+			}
+		}
+	} else {
+		if(battle_config.mob_delay_rate != 100) {
+			delay1 = delay1 * battle_config.mob_delay_rate / 100;
+			delay2 = delay2 * battle_config.mob_delay_rate / 100;
+		}
+	}
+
+	if(delay1 < 0) delay1 = 0;
+	if(delay2 < 0) delay2 = 0;
+
+	for(i=0; i<num; i++) {
+		md = (struct mob_data *)aCalloc(1,sizeof(struct mob_data));
+
+		md->bl.prev = NULL;
+		md->bl.next = NULL;
+		md->bl.m = m;
+		md->bl.x = x;
+		md->bl.y = y;
+
+		if(strcmp(name,"--en--") == 0) {
+			memcpy(md->name,mob_db[class_].name,24);
+		} else if(strcmp(name,"--ja--") == 0) {
+			memcpy(md->name,mob_db[class_].jname,24);
+		} else {
+			memcpy(md->name,name,24);
+			md->name[23] = '\0';
+		}
+
+		md->n           = i;
+		md->base_class  = class_;
+		md->class_      = class_;
+		md->bl.id       = npc_get_new_npc_id();
+		md->m           = m;
+		md->x0          = x;
+		md->y0          = y;
+		md->xs          = xs;
+		md->ys          = ys;
+		md->spawndelay1 = delay1;
+		md->spawndelay2 = delay2;
+		md->luascript   = 1;
+
+		memset(&md->state,0,sizeof(md->state));
+		md->target_id   = 0;
+		md->attacked_id = 0;
+		md->speed       = mob_db[class_].speed;
+
+		if(mob_db[class_].mode & MD_ITEMLOOT)
+			md->lootitem = (struct item *)aCalloc(LOOTITEM_SIZE,sizeof(struct item));
+		else
+			md->lootitem = NULL;
+
+		if(eventname[0]) {
+			memcpy(md->npc_event,eventname,50);
+			md->npc_event[49] = '\0';	// froce \0 terminal
+		}
+		md->bl.type = BL_MOB;
+		map_addiddb(&md->bl);
+
+		if(mob_spawn(md->bl.id)) {
+			// 出現失敗、座標が指定されているなら周囲のセルをチェック
+			if(md->x0 != 0 && md->y0 != 0) {
+				int x0 = md->x0 - md->xs;
+				int y0 = md->y0 - md->ys;
+				int x1 = md->x0 + md->xs;
+				int y1 = md->y0 + md->ys;
+
+				if(map_searchfreecell(NULL, md->m, x0, y0, x1, y1) <= 0) {
+					// 侵入可能セルが全くないので削除する
+					printf("npc_monster spawn stacked (%d,%d) - (%d,%d)\a\n", x0, y0, x1, y1);
+					map_deliddb(&md->bl);
+					if(md->lootitem) {
+						aFree(md->lootitem);
+						md->lootitem = NULL;
+					}
+					map_freeblock(md);
+					break;
+				}
+			}
+		}
+		if(mob_db[md->class_].mexp > 0) {
+			if(!(md->spawndelay1 == -1 && md->spawndelay2 == -1 && md->n == 0)) {
+				// 再出現するMVPボスなら凸面鏡用に登録
+				map[md->bl.m].mvpboss = md;
+			}
+		}
+
+		if(guild_id > 0)
+			md->guild_id = guild_id;
+		npc_mob++;
+	}
 
 	return 0;
 }

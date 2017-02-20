@@ -544,7 +544,7 @@ static int luafunc_addrandopt(lua_State *NL)
  */
 static int luafunc_npcspawn(lua_State *NL)
 {
-	char name[50],map[24],function[50] = "";
+	char name[50],map[16],function[50] = "";
 	short x,y,dir,class_;
 
 	sprintf(map, "%s", luaL_checkstring(NL,1));
@@ -574,6 +574,62 @@ static int luafunc_npctouch(lua_State *NL)
 	sprintf(function, "%s", luaL_checkstring(NL,4));
 
 	lua_pushinteger(NL,npc_addtouch_lua(name,xs,ys,function));
+	return 1;
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+static int luafunc_warpspawn(lua_State *NL)
+{
+	char name[24],map[16],to_map[16],function[50];
+	short x,y;
+	short to_x,to_y,xs,ys;
+	
+	sprintf(map,"%s",luaL_checkstring(NL,1));
+	x=luaL_checkint(NL,2);
+	y=luaL_checkint(NL,3);
+
+	sprintf(name,"%s",luaL_checkstring(NL,4));
+
+	xs=luaL_checkint(NL,5);
+	ys=luaL_checkint(NL,6);
+	sprintf(to_map,"%s",luaL_checkstring(NL,7));
+	to_x=luaL_checkint(NL,8);
+	to_y=luaL_checkint(NL,9);
+	sprintf(function,"%s",luaL_checkstring(NL,10));
+
+	lua_pushinteger(NL,npc_warpspawn_lua(map,x,y,name,xs,ys,to_map,to_x,to_y,function));
+	return 1;
+}
+
+/*==========================================
+ *
+ *------------------------------------------
+ */
+static int luafunc_mobspawn(lua_State *NL)
+{
+	char name[24],map[16],function[50];
+	short x,y,xs,ys,class_,num,d1,d2;
+	int guild;
+
+	sprintf(map,"%s",luaL_checkstring(NL,1));
+	x=luaL_checkint(NL,2);
+	y=luaL_checkint(NL,3);
+	xs=luaL_checkint(NL,4);
+	ys=luaL_checkint(NL,5);
+
+	sprintf(name,"%s",luaL_checkstring(NL,6));
+
+	class_=luaL_checkint(NL,7);
+	num=luaL_checkint(NL,8);
+	d1=luaL_checkint(NL,9);
+	d2=luaL_checkint(NL,10);
+	sprintf(function,"%s",luaL_checkstring(NL,11));
+	guild=luaL_checkint(NL,12);
+
+	lua_pushinteger(NL,npc_mobspawn_lua(map,x,y,xs,ys,name,class_,num,d1,d2,function,guild));
 	return 1;
 }
 
@@ -728,6 +784,8 @@ const struct Lua_function luafunc[] = {
 
 	{"npcspawn",luafunc_npcspawn},
 	{"npctouch",luafunc_npctouch},
+	{"warpspawn",luafunc_warpspawn},
+	{"mobspawn",luafunc_mobspawn},
 	{"mes",luafunc_mes},
 	{"next",luafunc_next},
 	{"close",luafunc_close},
