@@ -187,6 +187,9 @@
     <ClCompile Include="..\src\common\zlib\trees.c">
       <Filter>zlib</Filter>
     </ClCompile>
+    <ClCompile Include="..\src\map\luascript.c">
+      <Filter>map_sql</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\map\sql\mapreg_sql.h">
@@ -380,6 +383,9 @@
     </ClInclude>
     <ClInclude Include="..\src\common\zlib\zlib.h">
       <Filter>zlib</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\map\luascript.h">
+      <Filter>map_sql</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

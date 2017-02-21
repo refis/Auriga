@@ -524,6 +524,8 @@ static int npc_timeout_timer(int tid,unsigned int tick,int id,void *data)
 		clif_scriptclose(sd,sd->npc_id);
 		sd->npc_id         =  0;
 		sd->npc_idle_timer = -1;
+	    sd->lua_state = L_RUN;
+	    sd->NL=NULL;
 		if(sd->stack) {
 			// 元のスタック情報を破棄
 			script_free_stack(sd->stack);
